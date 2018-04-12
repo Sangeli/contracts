@@ -1,6 +1,5 @@
 pragma solidity ^0.4.18;
 import './SmartTokenController.sol';
-import './Managed.sol';
 import './Utils.sol';
 import './interfaces/ITokenConverter.sol';
 import './interfaces/ISmartToken.sol';
@@ -28,7 +27,7 @@ import './interfaces/IEtherToken.sol';
       Other potential solutions might include a commit/reveal based schemes
     - Possibly add getters for the connector fields so that the client won't need to rely on the order in the struct
 */
-contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
+contract BancorConverter is ITokenConverter, SmartTokenController {
     uint32 private constant MAX_WEIGHT = 1000000;
     uint32 private constant HALF_MAX = 500000;
     uint32 private constant MAX_CONVERSION_FEE = 1000000;
@@ -38,8 +37,8 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         bool isSet;                     // used to tell if the mapping element is defined
     }
 
-    string public version = '0.7';
-    string public converterType = 'bancor';
+    string public version = '0.1';
+    string public converterType = 'buffer';
 
     IBancorConverterExtensions public extensions;       // bancor converter extensions contract
     IERC20Token[] public connectorTokens;               // ERC20 standard token addresses
@@ -430,8 +429,6 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         uint256 connectorBalance = getConnectorBalance(_connectorToken);
         // ensure that the trade will only deplete the connector if the total supply is depleted as well
         assert(amount < connectorBalance || (amount == connectorBalance && _sellAmount == tokenSupply));
-
-        Connector storage connector = connectors[_connectorToken];
 
         // destroy _sellAmount from the caller's balance in the smart token
         token.destroy(msg.sender, _sellAmount);

@@ -215,7 +215,7 @@ contract('BancorConverter', (accounts) => {
         }
     });
 
-    it('should throw when a non owner and non manager attempts to update the fee', async () => {
+    it('should throw when a non owner attempts to update the fee', async () => {
         let converter = await BancorConverter.new(tokenAddress, converterExtensionsAddress, 200000, connectorTokenAddress, connectorTokenAddress2);
 
         try {
