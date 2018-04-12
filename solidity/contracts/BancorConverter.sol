@@ -30,12 +30,10 @@ import './interfaces/IEtherToken.sol';
 */
 contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
     uint32 private constant MAX_WEIGHT = 1000000;
+    uint32 private constant HALF_MAX = 500000;
     uint32 private constant MAX_CONVERSION_FEE = 1000000;
 
     struct Connector {
-        uint256 virtualBalance;         // connector virtual balance
-        uint32 weight;                  // connector weight, represented in ppm, 1-1000000
-        bool isVirtualBalanceEnabled;   // true if virtual balance is enabled, false if not
         bool isPurchaseEnabled;         // is purchase of the smart token enabled with the connector, can be set by the owner
         bool isSet;                     // used to tell if the mapping element is defined
     }
@@ -47,7 +45,6 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
     IERC20Token[] public connectorTokens;               // ERC20 standard token addresses
     IERC20Token[] public quickBuyPath;                  // conversion path that's used in order to buy the token with ETH
     mapping (address => Connector) public connectors;   // connector token addresses -> connector data
-    uint32 private totalConnectorWeight = 0;            // used to efficiently prevent increasing the total connector weight above 100%
     uint32 public maxConversionFee = 0;                 // maximum conversion fee for the lifetime of the contract, represented in ppm, 0...1000000 (0 = no fee, 100 = 0.01%, 1000000 = 100%)
     uint32 public conversionFee = 0;                    // current conversion fee, represented in ppm, 0...maxConversionFee
     bool public conversionsEnabled = true;              // true if token conversions is enabled, false if not
@@ -64,10 +61,10 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         @param  _token              smart token governed by the converter
         @param  _extensions         address of a bancor converter extensions contract
         @param  _maxConversionFee   maximum conversion fee, represented in ppm
-        @param  _connectorToken     optional, initial connector, allows defining the first connector at deployment time
-        @param  _connectorWeight    optional, weight for the initial connector
+        @param  _connectorToken1    connector token 1
+        @param  _connectorToken2    connector token 2
     */
-    function BancorConverter(ISmartToken _token, IBancorConverterExtensions _extensions, uint32 _maxConversionFee, IERC20Token _connectorToken, uint32 _connectorWeight)
+    function BancorConverter(ISmartToken _token, IBancorConverterExtensions _extensions, uint32 _maxConversionFee, IERC20Token _connectorToken1, IERC20Token _connectorToken2)
         public
         SmartTokenController(_token)
         validAddress(_extensions)
@@ -76,8 +73,8 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         extensions = _extensions;
         maxConversionFee = _maxConversionFee;
 
-        if (_connectorToken != address(0))
-            addConnector(_connectorToken, _connectorWeight, false);
+        addConnector(_connectorToken1);
+        addConnector(_connectorToken2);
     }
 
     // validates a connector token address - verifies that the address belongs to one of the connector tokens
@@ -110,12 +107,6 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         _;
     }
 
-    // validates connector weight range
-    modifier validConnectorWeight(uint32 _weight) {
-        require(_weight > 0 && _weight <= MAX_WEIGHT);
-        _;
-    }
-
     // validates a conversion path - verifies that the number of elements is odd and that maximum number of 'hops' is 10
     modifier validConversionPath(IERC20Token[] _path) {
         require(_path.length > 2 && _path.length <= (1 + 2 * 10) && _path.length % 2 == 1);
@@ -128,9 +119,9 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         _;
     }
 
-    // allows execution only for owner or manager
-    modifier ownerOrManagerOnly {
-        require(msg.sender == owner || msg.sender == manager);
+    // allows execution only for owner
+    modifier ownerOnly {
+        require(msg.sender == owner);
         _;
     }
 
@@ -181,7 +172,7 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
     }
 
     /*
-        @dev allows the manager to update the quick buy path
+        @dev allows the owner to update the quick buy path
 
         @param _path    new quick buy path, see conversion path format in the BancorQuickConverter contract
     */
@@ -194,7 +185,7 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
     }
 
     /*
-        @dev allows the manager to clear the quick buy path
+        @dev allows the owner to clear the quick buy path
     */
     function clearQuickBuyPath() public ownerOnly {
         quickBuyPath.length = 0;
@@ -212,23 +203,23 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
     /**
         @dev disables the entire conversion functionality
         this is a safety mechanism in case of a emergency
-        can only be called by the manager
+        can only be called by the owner
 
         @param _disable true to disable conversions, false to re-enable them
     */
-    function disableConversions(bool _disable) public ownerOrManagerOnly {
+    function disableConversions(bool _disable) public ownerOnly {
         conversionsEnabled = !_disable;
     }
 
     /**
         @dev updates the current conversion fee
-        can only be called by the manager
+        can only be called by the owner
 
         @param _conversionFee new conversion fee, represented in ppm
     */
     function setConversionFee(uint32 _conversionFee)
         public
-        ownerOrManagerOnly
+        ownerOnly
         validConversionFee(_conversionFee)
     {
         ConversionFeeUpdate(conversionFee, _conversionFee);
@@ -249,51 +240,21 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         can only be called by the owner while the converter is inactive
 
         @param _token                  address of the connector token
-        @param _weight                 constant connector weight, represented in ppm, 1-1000000
-        @param _enableVirtualBalance   true to enable virtual balance for the connector, false to disable it
     */
-    function addConnector(IERC20Token _token, uint32 _weight, bool _enableVirtualBalance)
+    function addConnector(IERC20Token _token)
         public
         ownerOnly
         inactive
         validAddress(_token)
         notThis(_token)
-        validConnectorWeight(_weight)
     {
-        require(_token != token && !connectors[_token].isSet && totalConnectorWeight + _weight <= MAX_WEIGHT); // validate input
+        require(_token != token && !connectors[_token].isSet); // validate input
 
-        connectors[_token].virtualBalance = 0;
-        connectors[_token].weight = _weight;
-        connectors[_token].isVirtualBalanceEnabled = _enableVirtualBalance;
         connectors[_token].isPurchaseEnabled = true;
         connectors[_token].isSet = true;
         connectorTokens.push(_token);
-        totalConnectorWeight += _weight;
     }
 
-    /**
-        @dev updates one of the token connectors
-        can only be called by the owner
-
-        @param _connectorToken         address of the connector token
-        @param _weight                 constant connector weight, represented in ppm, 1-1000000
-        @param _enableVirtualBalance   true to enable virtual balance for the connector, false to disable it
-        @param _virtualBalance         new connector's virtual balance
-    */
-    function updateConnector(IERC20Token _connectorToken, uint32 _weight, bool _enableVirtualBalance, uint256 _virtualBalance)
-        public
-        ownerOnly
-        validConnector(_connectorToken)
-        validConnectorWeight(_weight)
-    {
-        Connector storage connector = connectors[_connectorToken];
-        require(totalConnectorWeight - connector.weight + _weight <= MAX_WEIGHT); // validate input
-
-        totalConnectorWeight = totalConnectorWeight - connector.weight + _weight;
-        connector.weight = _weight;
-        connector.isVirtualBalanceEnabled = _enableVirtualBalance;
-        connector.virtualBalance = _virtualBalance;
-    }
 
     /**
         @dev disables purchasing with the given connector token in case the connector token got compromised
@@ -312,9 +273,9 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
     }
 
     /**
-        @dev returns the connector's virtual balance if one is defined, otherwise returns the actual balance
+        @dev returns the connector's balance
 
-        @param _connectorToken  connector token contract address
+        @param _connectorToken connector token contract address
 
         @return connector balance
     */
@@ -325,7 +286,7 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         returns (uint256)
     {
         Connector storage connector = connectors[_connectorToken];
-        return connector.isVirtualBalanceEnabled ? connector.virtualBalance : _connectorToken.balanceOf(this);
+        return _connectorToken.balanceOf(this);
     }
 
     /**
@@ -371,7 +332,7 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
 
         uint256 tokenSupply = token.totalSupply();
         uint256 connectorBalance = getConnectorBalance(_connectorToken);
-        uint256 amount = extensions.formula().calculatePurchaseReturn(tokenSupply, connectorBalance, connector.weight, _depositAmount);
+        uint256 amount = extensions.formula().calculatePurchaseReturn(tokenSupply, connectorBalance, HALF_MAX, _depositAmount);
 
         // deduct the fee from the return amount
         uint256 feeAmount = getConversionFeeAmount(amount);
@@ -433,10 +394,7 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         uint256 amount = getPurchaseReturn(_connectorToken, _depositAmount);
         require(amount != 0 && amount >= _minReturn); // ensure the trade gives something in return and meets the minimum requested amount
 
-        // update virtual balance if relevant
         Connector storage connector = connectors[_connectorToken];
-        if (connector.isVirtualBalanceEnabled)
-            connector.virtualBalance = safeAdd(connector.virtualBalance, _depositAmount);
 
         // transfer _depositAmount funds from the caller in the connector token
         assert(_connectorToken.transferFrom(msg.sender, this, _depositAmount));
@@ -473,15 +431,13 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         // ensure that the trade will only deplete the connector if the total supply is depleted as well
         assert(amount < connectorBalance || (amount == connectorBalance && _sellAmount == tokenSupply));
 
-        // update virtual balance if relevant
         Connector storage connector = connectors[_connectorToken];
-        if (connector.isVirtualBalanceEnabled)
-            connector.virtualBalance = safeSub(connector.virtualBalance, amount);
 
         // destroy _sellAmount from the caller's balance in the smart token
         token.destroy(msg.sender, _sellAmount);
         // transfer funds to the caller in the connector token
         // the transfer might fail if the actual connector balance is smaller than the virtual balance
+        //TODO: maybe remove
         assert(_connectorToken.transfer(msg.sender, amount));
 
         dispatchConversionEvent(_connectorToken, _sellAmount, amount, false);
@@ -548,9 +504,8 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         greaterThanZero(_totalSupply)
         returns (uint256)
     {
-        Connector storage connector = connectors[_connectorToken];
         uint256 connectorBalance = getConnectorBalance(_connectorToken);
-        uint256 amount = extensions.formula().calculateSaleReturn(_totalSupply, connectorBalance, connector.weight, _sellAmount);
+        uint256 amount = extensions.formula().calculateSaleReturn(_totalSupply, connectorBalance, HALF_MAX, _sellAmount);
 
         // deduct the fee from the return amount
         uint256 feeAmount = getConversionFeeAmount(amount);
@@ -567,13 +522,11 @@ contract BancorConverter is ITokenConverter, SmartTokenController, Managed {
         @param isPurchase       true if it's a purchase, false if it's a sale
     */
     function dispatchConversionEvent(IERC20Token _connectorToken, uint256 _amount, uint256 _returnAmount, bool isPurchase) private {
-        Connector storage connector = connectors[_connectorToken];
 
         // calculate the new price using the simple price formula
-        // price = connector balance / (supply * weight)
-        // weight is represented in ppm, so multiplying by 1000000
+        // price = 2 * connector balance / supply
         uint256 connectorAmount = safeMul(getConnectorBalance(_connectorToken), MAX_WEIGHT);
-        uint256 tokenAmount = safeMul(token.totalSupply(), connector.weight);
+        uint256 tokenAmount = token.totalSupply() >> 1; //safeMul(token.totalSupply(), HALF_MAX);
 
         // normalize values
         uint8 tokenDecimals = token.decimals();

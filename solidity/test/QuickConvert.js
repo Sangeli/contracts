@@ -71,14 +71,14 @@ contract('BancorConverter', (accounts) => {
 
         erc20Token = await TestERC20Token.new('ERC20Token', 'ERC5', 1000000);
 
-        converter1 = await BancorConverter.new(smartToken1.address, converterExtensionsAddress, 0, etherToken.address, 250000);
+        converter1 = await BancorConverter.new(smartToken1.address, converterExtensionsAddress, 0, etherToken.address);
         converter1.address = converter1.address;
 
-        converter2 = await BancorConverter.new(smartToken2.address, converterExtensionsAddress, 0, smartToken1.address, 300000);
+        converter2 = await BancorConverter.new(smartToken2.address, converterExtensionsAddress, 0, smartToken1.address);
         converter2.address = converter2.address;
         await converter2.addConnector(smartToken3.address, 150000, false);
 
-        converter3 = await BancorConverter.new(smartToken3.address, converterExtensionsAddress, 0, smartToken4.address, 350000);
+        converter3 = await BancorConverter.new(smartToken3.address, converterExtensionsAddress, 0, smartToken4.address);
         converter3.address = converter3.address;
 
         converter4 = await BancorConverter.new(smartToken4.address, converterExtensionsAddress, 0, etherToken.address, 150000);
